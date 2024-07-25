@@ -75,7 +75,7 @@ class TaskData:
             self.n_match = fp.n_match
             if self.n_match > 0:
                 self.match_ids = fp.victim.ft_model.generate(
-                    self.ft_input_ids.unsqueeze(0),
+                    input_ids=self.ft_input_ids.unsqueeze(0),
                     max_new_tokens=self.n_match,
                     min_new_tokens=self.n_match,
                 )[0, self.ft_input_ids.shape[0] :]

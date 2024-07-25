@@ -5,6 +5,8 @@ from typing import List
 import torch
 import torch.distributions
 import transformers
+from huggingface_hub import list_repo_files
+from peft import AutoPeftModelForCausalLM
 
 
 def mellowmax(t: torch.Tensor, alpha=1.0, dim=-1):
@@ -34,12 +36,24 @@ class ModelConfig:
     def short_name(self):
         return self.model_name.split("/")[-1]
 
+TDC_LLAMA_PROMPT = """[INST] <<SYS>>
+You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+
+If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.
+<</SYS>>
+
+{instruction} [/INST] """
+
+LLAMA_SYSTEM_PROMPT = """You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+
+If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."""
+
 
 ft_datetime = "240506_223106"
 model_configs = {
     "llama-2": ModelConfig(
         model_name="meta-llama/Llama-2-7b-chat-hf",
-        peft_path=f"Llama-2-7b-chat-hf-{ft_datetime}",
+        peft_path=None,#f"Llama-2-7b-chat-hf-{ft_datetime}",
         response_template="[/INST]",
         first_token="Here",
         system_prompt=None,
@@ -47,7 +61,7 @@ model_configs = {
     ),
     "llama-3": ModelConfig(
         model_name="meta-llama/Meta-Llama-3-8B-Instruct",
-        peft_path="earlysoft-Meta-Llama-3-8B-Instruct-240722_214056",
+        peft_path="llama-3-harmful-ft",#f"meta-llama-3-8b-instruct-{ft_datetime}",
         response_template="<|start_header_id|>assistant<|end_header_id|>\n\n",
         first_token="Here",
         system_prompt=None,
@@ -55,7 +69,7 @@ model_configs = {
     ),
     "rr": ModelConfig(
         model_name="GraySwanAI/Llama-3-8B-Instruct-RR",
-        peft_path="earlysoft-Llama-3-8B-Instruct-RR-240711_152536",
+        peft_path=None,#"earlysoft-Llama-3-8B-Instruct-RR-240711_152536",
         response_template="<|start_header_id|>assistant<|end_header_id|>\n\n",
         first_token="Here",
         system_prompt=None,
@@ -63,15 +77,23 @@ model_configs = {
     ),
     "phi-3": ModelConfig(
         model_name="microsoft/Phi-3-mini-4k-instruct",
-        peft_path=f"Phi-3-mini-4k-instruct-{ft_datetime}",
+        peft_path=None,#f"Phi-3-mini-4k-instruct-{ft_datetime}",
         response_template="<|assistant|>\n",
         first_token="Here",
         system_prompt=None,
         sep=" ",
     ),
+    "lat": ModelConfig(
+        model_name="LLM-LAT/llama3-8b-instruct-rt-jailbreak-robust1",
+        peft_path=None,#f"Phi-3-mini-4k-instruct-{ft_datetime}",
+        response_template="<|assistant|>\n",
+        first_token="Here",
+        system_prompt=LLAMA_SYSTEM_PROMPT,
+        sep=" ",
+    ),
     "gemma-7b": ModelConfig(
         model_name="google/gemma-7b-it",
-        peft_path=f"gemma-7b-it-{ft_datetime}",
+        peft_path=None,#f"gemma-7b-it-{ft_datetime}",
         response_template="<end_of_turn>\n<start_of_turn>model\n",
         first_token="Sure",
         system_prompt=None,
@@ -79,7 +101,7 @@ model_configs = {
     ),
     "gemma-2b": ModelConfig(
         model_name="google/gemma-2b-it",
-        peft_path="fgemma-2b-it-240510_221755",
+        peft_path=None,#"gemma-2b-it-240510_221755",
         response_template="<end_of_turn>\n<start_of_turn>model\n",
         first_token="Sure",
         system_prompt=None,
@@ -87,7 +109,7 @@ model_configs = {
     ),
     "vicuna": ModelConfig(
         model_name="lmsys/vicuna-7b-v1.5",
-        peft_path=f"vicuna-7b-v1.5-{ft_datetime}",
+        peft_path=None,#f"vicuna-7b-v1.5-{ft_datetime}",
         response_template="ASSISTANT:",
         first_token="Here",
         system_prompt=None,
@@ -103,20 +125,6 @@ model_configs = {
         banned_tokens=[0],
     ),
 }
-
-
-TDC_LLAMA_PROMPT = """[INST] <<SYS>>
-You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
-
-If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.
-<</SYS>>
-
-{instruction} [/INST] """
-
-LLAMA_SYSTEM_PROMPT = """You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
-
-If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."""
-
 
 def load_tokenizer(tokenizer_name):
     hf_login()
@@ -164,14 +172,30 @@ def load_model(
         attn_implementation = "flash_attention_2"
 
     hf_login()
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch_dtype,
-        low_cpu_mem_usage=True,
-        attn_implementation=attn_implementation,
-        device_map=device_map,
-        trust_remote_code=True,
-    ).eval()
+    
+    # If the
+    files = list_repo_files(model_name)
+    has_adapter_config = any("adapter_config.json" in file for file in files)
+
+    if has_adapter_config:
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch_dtype,
+            low_cpu_mem_usage=True,
+            attn_implementation=attn_implementation,
+            device_map=device_map,
+            trust_remote_code=True
+        ).merge_and_unload().eval()
+    else: 
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch_dtype,
+            low_cpu_mem_usage=True,
+            attn_implementation=attn_implementation,
+            device_map=device_map,
+            trust_remote_code=True,
+        ).eval()
+
     if not requires_grad:
         # If we're not optimizing any model parameters, mark them
         # requires_grad(False). This will dramatically reduce memory
@@ -213,7 +237,11 @@ def hf_generate(model, input_ids, attention_mask=None, **kwargs):
         do_sample=False,  # argmax sampling, ignores the temp/top_p args
     )
     settings.update(kwargs)
-    return model.generate(input_ids, attention_mask=attention_mask, **settings)
+    return model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        **settings
+    )
 
 
 def load_vllm(model_name, tokenizer_name=None):

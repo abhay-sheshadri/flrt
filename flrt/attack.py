@@ -60,6 +60,7 @@ class AttackConfig:
     final_generate_tokens: int = 512
     checkpoint_freq: int = 100
     n_postprocess_select: int = 10
+    device: str = "cuda"
 
     # Objective functions!
     objectives: List[Objective] = None
@@ -191,7 +192,7 @@ def _attack(c: AttackConfig):
         )
 
     logger.info("Config:\n" + pprint.pformat(c.serialize()))
-    torch.set_default_device("cuda")
+    torch.set_default_device(c.device)
     random.seed(c.seed)
     np.random.seed(c.seed)
     torch.manual_seed(c.seed)

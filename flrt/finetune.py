@@ -39,8 +39,11 @@ def finetune(c: FinetuneConfig):
     # DATASET
     ########################################
     phase = "dev"
-    behaviors = json.load(open(f"data/{phase}_behaviors.json", "r"))
-    sample_instances = pickle.load(open(f"data/{phase}_sample_instances.pkl", "rb"))
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    behaviors_path = os.path.join(current_dir, "data", phase, "behaviors.json")
+    instances_path = os.path.join(current_dir, "data", phase, "sample_instances.pkl")
+    behaviors = json.load(open(behaviors_path, "r"))
+    sample_instances = pickle.load(open(instances_path, "rb"))
 
     rows = []
     for b in behaviors:
@@ -55,7 +58,17 @@ def finetune(c: FinetuneConfig):
         )
     eval_dataset = train_test_split["test"]
 
-    tokenizer = util.load_tokenizer(mc.model_name)
+    ########################################
+    # MODEL & TOKENIZER
+    ########################################
+    model_kwargs = dict(
+        #trust_remote_code=True,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        attn_implementation="flash_attention_2",
+    )
+    
+    model, tokenizer = util.load_model_and_tokenizer(mc.model_name, **model_kwargs)
 
     def format_prompt(example, include_completion=True):
         output_texts = []
@@ -71,20 +84,6 @@ def finetune(c: FinetuneConfig):
 
     collator = trl.DataCollatorForCompletionOnlyLM(
         mc.response_template, tokenizer=tokenizer
-    )
-
-    ########################################
-    # MODEL
-    ########################################
-    # NOTE: training in float16 often causes nans.
-    model_kwargs = dict(
-        trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        attn_implementation="flash_attention_2",
-    )
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-        mc.model_name, **model_kwargs
     )
 
     peft_config = peft.LoraConfig(
@@ -139,7 +138,9 @@ def finetune(c: FinetuneConfig):
     # TEST
     ########################################
 
-    behaviors = json.load(open("data/test_behaviors.json", "r"))
+    phase = "test"
+    behaviors_path = os.path.join(current_dir, "data", phase, "behaviors.json")
+    behaviors = json.load(open(behaviors_path, "r"))
     rows = []
     for b in behaviors:
         rows.append({"prompt": b})
@@ -166,7 +167,7 @@ def finetune(c: FinetuneConfig):
 
 
 def modal_finetune(cfgs):
-    use_modal = True
+    use_modal = False
     try:
         is_debug_run = sys.gettrace() is not None or "profile" in __builtins__
     except TypeError:
